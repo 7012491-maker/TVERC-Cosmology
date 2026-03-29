@@ -4,6 +4,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from gwpy.timeseries import TimeSeries
+from scipy.signal import savgol_filter
 import scipy.constants as const
 import warnings
 import gc
@@ -28,6 +29,13 @@ end_off = start_off + (15 * 60)
 
 # Target frequency window for TVERC detection
 f0_min, f0_max = 720, 800
+
+# =======================================================
+# SMOOTHING INTENSITY (Integer)
+# 1 = Raw data (sharpest resolution)
+# 3, 5, 7, 10+ = Progressive levels of smoothing
+# =======================================================
+smoothing_level = 1
 
 def get_high_res_spectrum(start, end, label):
     """Fetches raw LIGO strain data and returns the true coherence spectrum.
@@ -56,7 +64,7 @@ def get_high_res_spectrum(start, end, label):
 
 def run_avalanche_search():
     """Executes the TVERC single-point calibration search with rigorous DSP."""
-    print("\n--- LAUNCHING TVERC SINGLE CALIBRATION (V8.4 - Strict DSP) ---")
+    print("\n--- LAUNCHING TVERC SINGLE CALIBRATION (V8.5 - Strict DSP + Smooth) ---")
     
     freqs_off, bg_spectrum = get_high_res_spectrum(start_off, end_off, "BKG (OFF)")
     freqs_on, flare_spectrum = get_high_res_spectrum(start_on, end_on, "SIG (ON)")
@@ -68,14 +76,28 @@ def run_avalanche_search():
         plt.figure(figsize=(20, 12))
         ax = plt.gca()
         
-        # Plot both the background and the signal to prove statistical significance
+        # Plot Background (Always raw)
         plt.plot(freqs_off, bg_spectrum, color='gray', lw=1.5, alpha=0.7, label='Background Coherence (OFF)')
-        plt.plot(freqs_on, flare_spectrum, color='darkred', lw=3, label='Raw Acoustic Hum (ON)')
+        
+        # Determine smoothing logic for the Signal (ON)
+        if smoothing_level <= 1:
+            plot_signal = flare_spectrum
+            plt.plot(freqs_on, plot_signal, color='darkred', lw=3, label='Raw Acoustic Hum (ON)')
+        else:
+            # Apply Savitzky-Golay filter to the signal
+            win_len = smoothing_level if smoothing_level % 2 != 0 else smoothing_level + 1
+            poly = 3 if win_len >= 5 else 1
+            plot_signal = savgol_filter(flare_spectrum, win_len, poly)
+            
+            # Plot the raw signal faintly in the background for transparency
+            plt.plot(freqs_on, flare_spectrum, color='lightcoral', lw=1.5, alpha=0.5, label='Raw Signal (Transparent)')
+            # Plot the smoothed signal on top
+            plt.plot(freqs_on, plot_signal, color='darkred', lw=3, label=f'Filtered Hum (Smooth: {win_len})')
 
-        # --- PEAK DETECTION (MAXIMUM ONLY) ---
-        max_idx = np.argmax(flare_spectrum)
+        # --- PEAK DETECTION (ON PLOTTED SIGNAL) ---
+        max_idx = np.argmax(plot_signal)
         peak_freq = freqs_on[max_idx]
-        peak_amp = flare_spectrum[max_idx]
+        peak_amp = plot_signal[max_idx]
         bg_at_peak = np.interp(peak_freq, freqs_off, bg_spectrum)
         
         # Annotate the Maximum Peak (Color matched to original dodgerblue style)
@@ -96,7 +118,7 @@ def run_avalanche_search():
             f"end_on      = flare_gps + {on_offset_max}m\n"
             f"start_off   = flare_gps {'+' if off_offset_min >= 0 else ''}{off_offset_min}m\n"
             f"f0_min/max  = {f0_min}, {f0_max} Hz\n"
-            f"DSP Mode    = Raw Coherence (Strict)"
+            f"smoothing   = {smoothing_level}"
         )
         
         props = dict(boxstyle='round', facecolor='whitesmoke', alpha=0.95, edgecolor='gray')
@@ -105,7 +127,7 @@ def run_avalanche_search():
 
         # Axis scaling and formatting
         plt.xlim(f0_min, f0_max)
-        y_max = max(np.max(flare_spectrum), np.max(bg_spectrum))
+        y_max = max(np.max(plot_signal), np.max(bg_spectrum), np.max(flare_spectrum))
         plt.ylim(0, y_max * 1.25) # Start at 0, leave headroom for annotation
         
         # 2x font sizes for Academic Output
@@ -122,7 +144,7 @@ def run_avalanche_search():
         plt.tight_layout()
         
         # Memory management
-        del freqs_off, bg_spectrum, freqs_on, flare_spectrum
+        del freqs_off, bg_spectrum, freqs_on, flare_spectrum, plot_signal
         gc.collect()
         
         plt.show()
@@ -130,3 +152,4 @@ def run_avalanche_search():
         print("\nCRITICAL ERROR: Analysis aborted due to missing LIGO data segments.")
 
 run_avalanche_search()
+        
