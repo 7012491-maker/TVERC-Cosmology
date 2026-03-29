@@ -1,6 +1,5 @@
 # Install the necessary libraries for gravitational wave data analysis
-!pip install -q gwpy
-!pip install -q lalsuite
+!pip install -q gwpy lalsuite
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -27,7 +26,7 @@ f_target_min = 1330
 f_target_max = 1350
 
 def run_evolution_search():
-    print(f"\n--- LAUNCHING TVERC EVOLUTION SWEEP: GRS 1915+105 (V4.0) ---")
+    print(f"\n--- LAUNCHING TVERC EVOLUTION SWEEP: GRS 1915+105 (V4.1 - Strict DSP) ---")
     print(f"Scanning hum power in the band: {f_target_min}-{f_target_max} Hz")
     
     valid_delays = []
@@ -39,7 +38,7 @@ def run_evolution_search():
         print(f"[ANALYSIS] Lag: +{lag:3} min | GPS: {start}")
         
         try:
-            # Fetching raw data from Hanford and Livingston
+            # Fetching RAW data from Hanford and Livingston
             h1 = TimeSeries.fetch_open_data('H1', start, end, cache=True)
             l1 = TimeSeries.fetch_open_data('L1', start, end, cache=True)
 
@@ -47,29 +46,31 @@ def run_evolution_search():
                 print(f"  -> Detectors offline or data missing, skipping.")
                 continue
 
-            # Whitening to normalize the spectral floor
-            h1_w = h1.whiten()
-            l1_w = l1.whiten()
-
-            # High-resolution cross-detector coherence
-            coh = h1_w.coherence(l1_w, fftlength=4, overlap=2)
+            # CRITICAL FIX: Direct coherence calculation on RAW strain data.
+            # No whitening applied to preserve true phase evolution over time.
+            coh = h1.coherence(l1, fftlength=4, overlap=2)
             
             f_vals = coh.frequencies.value
-            c_vals = np.nan_to_num(coh.value)
+            c_vals = coh.value
 
             # Filtering for the TVERC target frequency window
             mask = (f_vals >= f_target_min) & (f_vals <= f_target_max)
             c_target = c_vals[mask]
 
-            # Calculate mean coherence (Hum Power) for this temporal window
-            mean_power = np.mean(c_target)
+            # Safe mean calculation (ignoring potential NaNs from missing data segments)
+            valid_c_target = c_target[~np.isnan(c_target)]
             
-            valid_delays.append(lag)
-            hum_energies.append(mean_power)
-            print(f"  -> Mean Hum Amplitude: {mean_power:.6f}")
+            if len(valid_c_target) > 0:
+                mean_power = np.mean(valid_c_target)
+                
+                valid_delays.append(lag)
+                hum_energies.append(mean_power)
+                print(f"  -> Mean Hum Amplitude: {mean_power:.6f}")
+            else:
+                print(f"  -> No valid data in frequency band, skipping.")
 
             # Memory cleanup
-            del h1, l1, h1_w, l1_w, coh
+            del h1, l1, coh
             gc.collect()
 
         except Exception as e:
@@ -86,7 +87,7 @@ def run_evolution_search():
         
         # Plotting the evolution line (Markers kept as simple circles)
         plt.plot(valid_delays, hum_energies, marker='o', markersize=12, 
-                 color='darkred', lw=4, label='Twilight Hum Power')
+                 color='darkred', lw=4, label='Raw Acoustic Hum Power')
         
         # Visual shading to highlight energy levels
         plt.fill_between(valid_delays, hum_energies, np.min(hum_energies)*0.95, 
